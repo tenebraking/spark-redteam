@@ -34,21 +34,68 @@ async function run() {
   await page.waitForTimeout(4000);
   await page.screenshot({ path: PREFIX + "-01-spark-home.png" });
 
+  // --- Attach GitHub connector via "Upload & tools" → "More uploads" → "Import code" ---
+  // This is the correct UI flow to attach a GitHub repo as context before creating a task.
+  let connectorAttached = false;
+  if (vector.connector_repo) {
+    console.log(`[${vector.id}] Attaching GitHub repo via Import code: ${vector.connector_repo}`);
+    try {
+      // Step 1: Click "Upload & tools" button (the "+" icon)
+      await page.click('[aria-label="Upload & tools"]');
+      await page.waitForTimeout(1000);
+
+      // Step 2: Click "More uploads"
+      await page.getByText("More uploads", { exact: true }).click();
+      await page.waitForTimeout(800);
+
+      // Step 3: Click "Import code"
+      await page.getByText("Import code", { exact: true }).click();
+      await page.waitForTimeout(2000);
+      await page.screenshot({ path: PREFIX + "-01b-import-code-dialog.png" });
+
+      // Step 4: Find the repo URL input and type the GitHub URL
+      const repoInput = await page.$('input[type="url"], input[type="text"], mat-form-field input');
+      if (repoInput) {
+        await repoInput.click();
+        await repoInput.type(`https://github.com/${vector.connector_repo}`, { delay: 30 });
+        await page.waitForTimeout(500);
+
+        // Step 5: Click Import button
+        await page.getByText("Import", { exact: true }).click();
+        await page.waitForTimeout(4000);
+        connectorAttached = true;
+        console.log(`[${vector.id}] Repo imported successfully`);
+      } else {
+        console.log(`[${vector.id}] No input field found in Import code dialog`);
+      }
+    } catch (e) {
+      console.log(`[${vector.id}] Import code attach failed: ${e.message}`);
+    }
+    await page.screenshot({ path: PREFIX + "-01c-after-import.png" });
+  }
+  console.log(`[${vector.id}] Connector attached: ${connectorAttached}`);
+
   // --- Type prompt and submit ---
-  // Spark home has a text input with placeholder "Describe a task"
-  // Include the repo name explicitly in the prompt so Spark uses the GitHub connector
-  // without requiring manual connector card selection in the UI.
+  // The actual Spark task input is a Quill editor div with aria-label "Enter a prompt for Gemini"
   let typed = false;
-  for (const sel of ["textarea", '[contenteditable="true"]', 'input[placeholder*="task" i]', 'input[type="text"]']) {
-    const el = await page.$(sel);
-    if (el) {
-      try {
-        await el.click();
-        await page.waitForTimeout(300);
-        await page.keyboard.type(vector.spark_prompt, { delay: 8 });
-        typed = true;
-        break;
-      } catch (e) { /* try next selector */ }
+  const inputEl = await page.$('[aria-label="Enter a prompt for Gemini"]');
+  if (inputEl) {
+    try {
+      await inputEl.click();
+      await page.waitForTimeout(300);
+      await page.keyboard.type(vector.spark_prompt, { delay: 8 });
+      typed = true;
+    } catch (e) {
+      console.log(`[${vector.id}] Quill input failed: ${e.message}`);
+    }
+  }
+  if (!typed) {
+    for (const sel of ['[contenteditable="true"][data-placeholder="Describe a task"]', '[contenteditable="true"]']) {
+      const el = await page.$(sel);
+      if (el) {
+        try { await el.click(); await page.waitForTimeout(300); await page.keyboard.type(vector.spark_prompt, { delay: 8 }); typed = true; break; }
+        catch (e) { /* try next */ }
+      }
     }
   }
   console.log(`[${vector.id}] Typed: ${typed}`);
@@ -115,7 +162,7 @@ async function run() {
     }, vector.spark_prompt.slice(0, 40));
 
     const done = /completed|done|finished|here.s (a |your )?summary|I.ve (completed|finished|reviewed|triaged|looked|found)/i.test(finalText)
-      || /cannot|declined|security caution|I.m unable|I'm not able/i.test(finalText)
+      || /cannot|declined|security caution|I.m unable|I'm not able|something went wrong/i.test(finalText)
       || /What can we do next/i.test(finalText);  // Spark shows this when a task finishes
     const signals = (vector.signals || []).filter(s => new RegExp(s, "i").test(finalText));
 
