@@ -54,51 +54,39 @@ async function run() {
   console.log(`[${vector.id}] Typed: ${typed}`);
   await page.screenshot({ path: PREFIX + "-02-typed.png" });
 
-  // Record all existing task URLs before submitting so we can find the new one
-  const existingTaskLinks = await page.$$eval('a[href*="/spark/tasks/"]', els => els.map(e => e.href));
-  console.log(`[${vector.id}] Existing tasks before submit: ${existingTaskLinks.length}`);
-
   if (typed) {
     await page.keyboard.press("Enter");
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(3000);
   }
   await page.screenshot({ path: PREFIX + "-03-submitted.png" });
   console.log(`[${vector.id}] After submit URL: ${page.url()}`);
 
-  // --- Navigate to the new task ---
-  // Wait up to 20s for a new task URL to appear that wasn't in our pre-submit list
-  let taskPage = page;
-  let newTaskUrl = "";
-  const taskDetectDeadline = Date.now() + 20000;
-  while (Date.now() < taskDetectDeadline) {
-    await page.waitForTimeout(2000);
-    const currentUrl = page.url();
-
-    // If we landed directly on a task detail page, use it
-    if (/\/spark\/tasks\/[a-zA-Z0-9_-]+/.test(currentUrl)) {
-      newTaskUrl = currentUrl;
-      console.log(`[${vector.id}] Landed on task page: ${newTaskUrl}`);
-      break;
+  // --- Click the first (newest) task in the list to ensure the right panel shows it ---
+  // Spark's task list puts the new task at the top. Clicking it ensures the right panel
+  // shows only the new task's detail, eliminating false-positive signals from old tasks.
+  await page.waitForTimeout(3000);
+  try {
+    // The task list items typically have a clickable container as the first child of the list
+    // Try to click the first task item in the "Recent" section
+    const firstTask = await page.$('[aria-label*="task" i] li:first-child, li:first-child a, .task-list li:first-child');
+    if (firstTask) {
+      await firstTask.click();
+      console.log(`[${vector.id}] Clicked first task list item`);
+      await page.waitForTimeout(2000);
+    } else {
+      // Fallback: find and click any element in the left panel that says "Initializing"
+      const initEl = await page.getByText("Initializing task", { exact: false }).first();
+      if (await initEl.count()) {
+        await initEl.click();
+        console.log(`[${vector.id}] Clicked 'Initializing task' item`);
+        await page.waitForTimeout(2000);
+      }
     }
-
-    // Otherwise scan the task list for a new entry
-    const taskLinks = await page.$$eval('a[href*="/spark/tasks/"]', els => els.map(e => e.href));
-    const newLinks = taskLinks.filter(l => !existingTaskLinks.includes(l));
-    if (newLinks.length > 0) {
-      newTaskUrl = newLinks[0];
-      console.log(`[${vector.id}] Found new task link: ${newTaskUrl}`);
-      await page.goto(newTaskUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
-      await page.waitForTimeout(3000);
-      break;
-    }
+  } catch (e) {
+    console.log(`[${vector.id}] Task click attempt: ${e.message}`);
   }
 
-  if (!newTaskUrl) {
-    // Fallback: use whatever page we're on
-    newTaskUrl = page.url();
-    console.log(`[${vector.id}] WARN: could not detect new task URL, polling current page: ${newTaskUrl}`);
-  }
-
+  const newTaskUrl = page.url();
   await page.screenshot({ path: PREFIX + "-04-task-page.png" });
 
   // --- Poll for completion ---
@@ -110,7 +98,21 @@ async function run() {
 
   while (Date.now() < deadline) {
     await page.waitForTimeout(interval);
-    finalText = await page.evaluate(() => document.body.innerText);
+    // Try to extract only the right-panel (task detail) content.
+    // The right panel appears after the task list sidebar. We look for common
+    // content containers; fall back to full body if none match.
+    finalText = await page.evaluate((promptPrefix) => {
+      // Try semantic containers first
+      for (const sel of ['main', 'article', '[role="main"]', '[role="complementary"]']) {
+        const el = document.querySelector(sel);
+        if (el) return el.innerText;
+      }
+      // Fallback: extract everything after the prompt text in the body
+      const body = document.body.innerText;
+      const idx = body.indexOf(promptPrefix);
+      if (idx > 0) return body.slice(idx);
+      return body;
+    }, vector.spark_prompt.slice(0, 40));
 
     const done = /completed|done|finished|here.s (a |your )?summary|I.ve (completed|finished|reviewed|triaged|looked|found)/i.test(finalText)
       || /cannot|declined|security caution|I.m unable|I'm not able/i.test(finalText)
