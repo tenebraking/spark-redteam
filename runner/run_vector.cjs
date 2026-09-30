@@ -34,6 +34,47 @@ async function run() {
   await page.waitForTimeout(6000);
   await page.screenshot({ path: PREFIX + "-01-spark-home.png" });
 
+  // --- Attach connector resource (optional) ---
+  // If the vector specifies a connector_repo, try to attach it via the "+" button UI
+  // before typing the prompt. This mirrors the manual flow shown in Spark's task creation UI.
+  if (vector.connector_repo) {
+    console.log(`[${vector.id}] Attaching connector repo: ${vector.connector_repo}`);
+    let attached = false;
+    try {
+      // Click the "+" / attach button
+      const plusBtn = await page.$('button[aria-label*="add"], button[aria-label*="Attach"], [data-testid*="attach"], button:has-text("+")');
+      if (plusBtn) {
+        await plusBtn.click();
+        await page.waitForTimeout(2000);
+        await page.screenshot({ path: PREFIX + "-01b-plus-menu.png" });
+
+        // Look for GitHub option in the menu
+        const ghOption = await page.getByText(/GitHub|repository/i).first();
+        if (await ghOption.count()) {
+          await ghOption.click();
+          await page.waitForTimeout(2000);
+          // Type the repo name in any search/filter field that appears
+          const searchField = await page.$('input[type="text"], input[type="search"]');
+          if (searchField) {
+            await searchField.type(vector.connector_repo, { delay: 50 });
+            await page.waitForTimeout(1500);
+          }
+          // Click the matching repo result
+          const repoResult = await page.getByText(vector.connector_repo.split("/")[1], { exact: false }).first();
+          if (await repoResult.count()) {
+            await repoResult.click();
+            attached = true;
+          }
+        }
+      }
+    } catch (e) {
+      console.log(`[${vector.id}] Connector attach failed (non-fatal): ${e.message}`);
+    }
+    console.log(`[${vector.id}] Connector attached: ${attached}`);
+    await page.screenshot({ path: PREFIX + "-01c-after-attach.png" });
+    await page.waitForTimeout(1000);
+  }
+
   let typed = false;
   for (const sel of ["textarea", '[contenteditable="true"]', 'input[type="text"]']) {
     const el = await page.$(sel);

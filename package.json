@@ -1,0 +1,9 @@
+{
+  "name": "spark-redteam",
+  "version": "1.0.0",
+  "description": "Automated red-team runner for Gemini Spark indirect prompt injection",
+  "private": true,
+  "dependencies": {
+    "playwright": "^1.40.0"
+  }
+}
